@@ -26,6 +26,7 @@ struct nrf905_drvdata {
     int gpio_trx_ce;
     int gpio_tx_en;
     int gpio_dr;
+    uint8_t rx_pw;
 };
 
 static LIST_HEAD(device_list);
@@ -114,7 +115,7 @@ static void nrf905_spi_r_tx_address(struct spi_device *spi, uint8_t *address, si
 
 
 static void nrf905_spi_r_rx_payload(struct spi_device *spi, uint8_t *payload, uint8_t count) {
-    uint8_t txbytes[33];
+    uint8_t txbytes[count + 1];
     uint8_t rxbytes[sizeof(txbytes)];
 
     txbytes[0] = 0x24;
@@ -319,12 +320,52 @@ static ssize_t nrf905_attr_pa_pwr_read(struct device *dev, struct device_attribu
 static DEVICE_ATTR(pa_pwr, 0664, nrf905_attr_pa_pwr_read, nrf905_attr_pa_pwr_write);
 
 
+/** @brief Write handler for configuring the rx_pw attr */
+static ssize_t nrf905_attr_rx_pw_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct nrf905_drvdata *drvdata = dev_get_drvdata(dev);
+    uint8_t config;
+    uint8_t new_rx_pw;
+
+    if (sscanf(buf, "%hhu", &new_rx_pw) > 2) {
+        return -EINVAL;
+    }
+
+    dev_info(dev, "rx_pw: %hhu\n", new_rx_pw);
+
+    if (new_rx_pw == 0 || new_rx_pw > 32) {
+        dev_warn(dev, "rx_pw %hhu out of range!\n", new_rx_pw);
+        return -EINVAL;
+    }
+
+    config = nrf905_spi_r_config(drvdata->spi, 3);
+    config = (config & 0xC0) | new_rx_pw;
+
+    nrf905_spi_w_config(drvdata->spi, 3, config);
+    drvdata->rx_pw = new_rx_pw;
+
+    return count;
+}
+
+
+/** @brief Read handler for the rx_pw sysfs attribute */
+static ssize_t nrf905_attr_rx_pw_read(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct nrf905_drvdata *drvdata = dev_get_drvdata(dev);
+
+    return sprintf(buf, "%hhu", drvdata->rx_pw);
+}
+
+
+/** @brief Device attribute for configuring the RX payload width */
+static DEVICE_ATTR(rx_pw, 0664, nrf905_attr_rx_pw_read, nrf905_attr_rx_pw_write);
+
+
 /** @brief An array containing all the sysfs attributes */
 static struct attribute *nrf905_attributes[] = {
     &dev_attr_rx_address.attr,
     &dev_attr_tx_address.attr,
     &dev_attr_frequency.attr,
     &dev_attr_pa_pwr.attr,
+    &dev_attr_rx_pw.attr,
     NULL,
 };
 
@@ -372,7 +413,7 @@ static ssize_t nrf905_cdev_read(struct file *filp, char __user *buf, size_t coun
 
     gpio_set_value(drvdata->gpio_trx_ce, 0);
 
-    nrf905_spi_r_rx_payload(drvdata->spi, rxbuf, count);
+    nrf905_spi_r_rx_payload(drvdata->spi, rxbuf, drvdata->rx_pw);
 
     mutex_unlock(&nrf905_cdev_lock);
 
@@ -561,6 +602,9 @@ static int nrf905_probe(struct spi_device *spi) {
 
     // crystal oscillator frequency = 16MHz
     nrf905_spi_w_config(spi, 9, 0xDF);
+
+    // Default RX payload width as per datasheet
+    drvdata->rx_pw = 32;
 
     drvdata->spi = spi;
     spin_lock_init(&drvdata->spi_lock);
