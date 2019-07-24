@@ -319,12 +319,80 @@ static ssize_t nrf905_attr_pa_pwr_read(struct device *dev, struct device_attribu
 static DEVICE_ATTR(pa_pwr, 0664, nrf905_attr_pa_pwr_read, nrf905_attr_pa_pwr_write);
 
 
+/** @brief Write handler for the crc sysfs attr */
+static ssize_t nrf905_attr_crc_write(struct device *dev, struct device_attribute *attr, const char *buf, size_t count) {
+    struct spi_device *spi = to_spi_device(dev);
+    uint8_t config;
+    uint8_t crc;
+    uint8_t crc_config;
+
+    if (sscanf(buf, "%hhu", &crc) > 2) {
+        return -EINVAL;
+    }
+
+    dev_info(dev, "crc: %hhu\n", crc);
+
+    switch (crc) {
+        case 0:
+            crc_config = 0;
+            break;
+        case 8:
+            crc_config = 1;
+            break;
+        case 16:
+            crc_config = 3;
+            break;
+        default:
+            dev_warn(dev, "Invalid crc value %hhu! Possible values: 0, 8, or 16\n", crc);
+            return -EINVAL;
+            break;
+    }
+
+    config = nrf905_spi_r_config(spi, 9);
+    config = (config & 0x3F) | (crc_config << 6);
+
+    nrf905_spi_w_config(spi, 9, config);
+
+    return count;
+}
+
+
+/** @brief Read handler for the crc sysfs attr */
+static ssize_t nrf905_attr_crc_read(struct device *dev, struct device_attribute *attr, char *buf) {
+    struct spi_device *spi = to_spi_device(dev);
+    uint8_t config;
+    uint8_t crc;
+
+    config = nrf905_spi_r_config(spi, 9);
+    config = (config & 0xC0) >> 6;
+
+    switch (config) {
+        case 1:
+            crc = 8;
+            break;
+        case 3:
+            crc = 16;
+            break;
+        default:
+            crc = 0;
+            break;
+    }
+
+    return sprintf(buf, "%hhu", crc);
+}
+
+
+/** @brief Device attribute for configuring the CRC mode */
+static DEVICE_ATTR(crc, 0664, nrf905_attr_crc_read, nrf905_attr_crc_write);
+
+
 /** @brief An array containing all the sysfs attributes */
 static struct attribute *nrf905_attributes[] = {
     &dev_attr_rx_address.attr,
     &dev_attr_tx_address.attr,
     &dev_attr_frequency.attr,
     &dev_attr_pa_pwr.attr,
+    &dev_attr_crc.attr,
     NULL,
 };
 
